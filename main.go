@@ -2,51 +2,97 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
-type requestResult struct {
-	url    string
-	status string
+type extractedJob struct {
+	id       string
+	title    string
+	location string
+	salary   string
+	summary  string
 }
+
+var baseURL string = "https://kr.indeed.com/jobs?q=python&limit=50"
 
 func main() {
-	results := make(map[string]string)
-	c := make(chan requestResult)
-	urls := []string{
-		"https://www.airbnb.com/",
-		"https://www.google.com/",
-		"https://www.amazon.com/",
-		"https://www.reddit.com/",
-		"https://www.google.com/",
-		"https://soundcloud.com/",
-		"https://www.facebook.com/",
-		"https://www.instagram.com/",
-		"https://academy.nomadcoders.co/",
+	var jobs []extractedJob
+	totalPages := getPages()
+
+	for i := 0; i < totalPages; i++ {
+		extractedJobs := getPage(i)
+		jobs = append(jobs, extractedJobs...)
 	}
 
-	for _, url := range urls {
-		go hitURL(url, c)
-	}
-
-	for i := 0; i < len(urls); i++ {
-		// 모든 url이 하나씩 끝날때까지 기다리는게 아니라 가장 오래 걸리는 url에 걸리는 시간이다.
-		//fmt.Println(<-c)
-		result := <-c
-		results[result.url] = result.status
-	}
-
-	for url, status := range results {
-		fmt.Println(url, status)
-	}
+	fmt.Println(jobs)
 }
 
-func hitURL(url string, c chan<- requestResult) { //채널을 통해 데이터 전송만 가능하다는 의미, 수신 X
-	//fmt.Println("Checking:", url)
-	resp, err := http.Get(url)
-	status := "OK"
-	if err != nil || resp.StatusCode >= 400 {
-		status = "FAILED"
+func getPage(page int) []extractedJob {
+	var jobs []extractedJob
+	pageURL := baseURL + "&start=" + strconv.Itoa(page*50)
+	fmt.Println("Requesting", pageURL)
+
+	res, err := http.Get(pageURL)
+	checkErr(err)
+	checkCode(res)
+
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+
+	searchCards := doc.Find(".jobsearch-SerpJobCard")
+	searchCards.Each(func(i int, card *goquery.Selection) {
+		job := extractJob(card)
+		jobs = append(jobs, job)
+	})
+
+	return jobs
+}
+
+func extractJob(card *goquery.Selection) extractedJob {
+	id, _ := card.Attr("data-jk")
+	title := cleanString(card.Find(".title>a").Text())
+	location := cleanString(card.Find(".sjcl").Text())
+	salary := cleanString(card.Find(".salaryText").Text())
+	summary := cleanString(card.Find(".summary").Text())
+	return extractedJob{
+		id:       id,
+		title:    title,
+		location: location,
+		salary:   salary,
+		summary:  summary}
+}
+
+func cleanString(str string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(str)), " ")
+}
+
+func getPages() int {
+	pages := 0
+	res, err := http.Get(baseURL)
+	checkErr(err)
+	checkCode(res)
+
+	defer res.Body.Close()
+
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	checkErr(err)
+	doc.Find(".pagination").Each(func(i int, s *goquery.Selection) {
+		pages = s.Find("a").Length()
+	})
+	return pages
+}
+
+func checkErr(err error) {
+	if err != nil {
+		log.Fatalln(err)
 	}
-	c <- requestResult{url: url, status: status}
+}
+func checkCode(res *http.Response) {
+	if res.StatusCode != 200 {
+		log.Fatalln("Request failed with Status:", res.StatusCode)
+	}
 }
